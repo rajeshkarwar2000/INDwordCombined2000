@@ -72,7 +72,12 @@ jobs:
         working-directory: ${{ env.APP_DIR }}/android
         run: |
           chmod +x ./gradlew
-          ./gradlew assembleDebug --no-daemon
+          # dependency downloads occasionally fail on the runner (missing .pom errors): retry with a clean cache
+          for i in 1 2 3; do
+            if ./gradlew assembleDebug --no-daemon --refresh-dependencies -Dorg.gradle.internal.http.connectionTimeout=60000 -Dorg.gradle.internal.http.socketTimeout=60000; then ok=1; break; fi
+            echo "Attempt $i failed, retrying in 20s"; rm -rf ~/.gradle/caches/modules-2 ~/.gradle/caches/transforms-* ; sleep 20
+          done
+          [ "${ok:-0}" = 1 ]
           cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/INDword.apk
 
       - name: Upload APK
