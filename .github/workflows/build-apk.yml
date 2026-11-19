@@ -68,21 +68,19 @@ jobs:
           cp -r resources/res/. android/app/src/main/res/
           npx cap sync android
 
-      - name: Compile APK
-        working-directory: ${{ env.APP_DIR }}/android
-        run: |
-          chmod +x ./gradlew
-          # dependency downloads occasionally fail on the runner (missing .pom errors): retry with a clean cache
-          for i in 1 2 3; do
-            if ./gradlew assembleDebug --no-daemon --refresh-dependencies -Dorg.gradle.internal.http.connectionTimeout=60000 -Dorg.gradle.internal.http.socketTimeout=60000; then ok=1; break; fi
-            echo "Attempt $i failed, retrying in 20s"; rm -rf ~/.gradle/caches/modules-2 ~/.gradle/caches/transforms-* ; sleep 20
-          done
-          [ "${ok:-0}" = 1 ]
-          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/INDword.apk
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      - name: Cache Gradle
+        uses: actions/cache@v4
         with:
-          name: INDword-apk
-          path: ${{ env.APP_DIR }}/android/app/build/outputs/apk/debug/INDword.apk
-          if-no-files-found: error
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/package.json', '**/package-lock.json') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Use Maven Central mirror (fixes HTTP 429 Too Many Requests)
+        run: |
+          mkdir -p ~/.gradle/init.d
+          cat > ~/.gradle/init.d/mirror.gradle <<'EOF2'
+          // GitHub runner IPs get rate-limited (429) by repo.maven.apache.org.
+          // Redirect Maven Central to Google's public mirror of it. def mirrorUrl = 'https://maven-central.storage-download.googleapis.com/maven2/' def redirect = { repo -> if (repo instanceof MavenArtifactRepository) { def u = repo.url.toString() if (u.contains('repo.maven.apache.org') || u.contains('repo1.maven.org')) { repo.url = mirrorUrl } } } gradle.settingsEvaluated { settings -> settings.pluginManagement.repositories.configureEach(redirect) settings.dependencyResolutionManagement.repositories.configureEach(redirect) } gradle.allprojects { project -> project.buildscript.repositories.configureEach(redirect) project.repositories.configureEach(redirect) } EOF2 sed -i 's/^          //' ~/.gradle/init.d/mirror.gradle cat ~/.gradle/init.d/mirror.gradle - name: Compile APK working-directory: ${{ env.APP_DIR }}/android run: | chmod +x ./gradlew # No --refresh-dependencies and no cache wipe: those caused hundreds of repeated downloads -> HTTP 429. ok=0 for i in 1 2 3 4; do if ./gradlew assembleDebug --no-daemon \ -Dorg.gradle.internal.http.connectionTimeout=60000 \ -Dorg.gradle.internal.http.socketTimeout=60000 \ -Dorg.gradle.internal.repository.max.retries=8 \ -Dorg.gradle.internal.repository.initial.backoff=2000; then ok=1; break; fi echo "Attempt $i failed, retrying in $((i*30))s"; sleep $((i*30)) done [ "$ok" = 1 ] cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/INDword.apk - name: Upload APK uses: actions/upload-artifact@v4 with: name: INDword-apk path: ${{ env.APP_DIR }}/android/app/build/outputs/apk/debug/INDword.apk if-no-files-found: error
